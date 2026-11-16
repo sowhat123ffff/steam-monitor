@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
+    inputs:
+      discord_test:
+        description: "Send a Discord test message even if nothing changed"
+        type: boolean
+        default: false
 
 concurrency:
   group: pattern
@@ -124,6 +129,7 @@ jobs:
           git push
 
       - name: File issue on unresolvable entries
+        id: blocked
         if: steps.fetch.outputs.skip != 'true' && steps.resolve.outputs.code != '0'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -161,6 +167,7 @@ jobs:
           gh issue create \
             --title "Pattern resolve blocked: stable ${STABLE_SC}/${STABLE_SUI}, beta ${BETA_SC}/${BETA_SUI}" \
             --body-file issue_body.md
+          echo "created=true" >> "$GITHUB_OUTPUT"
 
       - name: Close resolved blocked issues
         if: steps.fetch.outputs.skip != 'true' && steps.resolve.outputs.code == '0'
@@ -188,6 +195,7 @@ jobs:
           done
 
       - name: Publish
+        id: publish
         if: steps.fetch.outputs.skip != 'true' && steps.resolve.outputs.code == '0'
         env:
           # README timestamps render in runner-local time; pin UTC.
@@ -202,3 +210,31 @@ jobs:
           git add pattern/ ipc/ README.md
           git commit -m "Update Steam rule patterns (stable $(ver stable), beta $(ver beta))"
           git push
+
+      - name: Notify Discord
+        # Only events that need a human: new build published, a newly filed
+        # blocked issue (not every re-run while it stays open), job failure,
+        # or an explicit test from workflow_dispatch.
+        if: always() && (steps.publish.outcome == 'success' || steps.blocked.outputs.created == 'true' || job.status == 'failure' || inputs.discord_test)
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PUBLISHED: ${{ steps.publish.outcome == 'success' }}
+          BLOCKED: ${{ steps.blocked.outputs.created == 'true' }}
+          FAILED: ${{ job.status == 'failure' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL secret not set, skipping"
+            exit 0
+          fi
+          if [ "$PUBLISHED" = true ]; then
+            msg="✅ steam-monitor published: $(git log -1 --format=%s)"
+          elif [ "$BLOCKED" = true ]; then
+            msg="🚨 steam-monitor pattern resolve blocked, nothing published (issue filed)"
+          elif [ "$FAILED" = true ]; then
+            msg="⚠️ steam-monitor Publish Pattern TOMLs run failed"
+          else
+            msg="🧪 steam-monitor Discord test"
+          fi
+          jq -n --arg c "$msg"$'\n'"$RUN_URL" '{content: $c}' \
+            | curl -fsS -o /dev/null -H 'Content-Type: application/json' -d @- "$DISCORD_WEBHOOK_URL"
