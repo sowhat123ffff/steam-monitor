@@ -3,10 +3,13 @@ name: Publish Pattern TOMLs
 on:
   schedule:
     - cron: "*/15 * * * *"
+    # Daily Discord summary, 09:07 UTC+8; off the 15-minute grid so it is
+    # a separate run. Keep in sync with SUMMARY in Notify Discord.
+    - cron: "7 1 * * *"
   workflow_dispatch:
     inputs:
       discord_test:
-        description: "Send a Discord test message even if nothing changed"
+        description: "Send the daily Discord summary now, marked as a test"
         type: boolean
         default: false
 
@@ -17,6 +20,7 @@ concurrency:
 permissions:
   contents: write
   issues: write
+  actions: read # daily summary counts recent runs
 
 jobs:
   pattern:
@@ -212,15 +216,18 @@ jobs:
           git push
 
       - name: Notify Discord
-        # Only events that need a human: new build published, a newly filed
-        # blocked issue (not every re-run while it stays open), job failure,
-        # or an explicit test from workflow_dispatch.
-        if: always() && (steps.publish.outcome == 'success' || steps.blocked.outputs.created == 'true' || job.status == 'failure' || inputs.discord_test)
+        # Events that need a human: new build published, a newly filed
+        # blocked issue (not every re-run while it stays open), job failure.
+        # Plus the daily summary (a missing one means the schedule stopped)
+        # and its workflow_dispatch test.
+        if: always() && (steps.publish.outcome == 'success' || steps.blocked.outputs.created == 'true' || job.status == 'failure' || github.event.schedule == '7 1 * * *' || inputs.discord_test)
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
           PUBLISHED: ${{ steps.publish.outcome == 'success' }}
           BLOCKED: ${{ steps.blocked.outputs.created == 'true' }}
           FAILED: ${{ job.status == 'failure' }}
+          SUMMARY: ${{ github.event.schedule == '7 1 * * *' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$DISCORD_WEBHOOK_URL" ]; then
@@ -234,7 +241,18 @@ jobs:
           elif [ "$FAILED" = true ]; then
             msg="⚠️ steam-monitor Publish Pattern TOMLs run failed"
           else
-            msg="🧪 steam-monitor Discord test"
+            since=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/pattern.yml/runs?created=>=$since&per_page=1" --jq .total_count || echo "?")
+            latest=$(python3 -c "
+          import json
+          v = json.load(open('pattern/versions.json'))
+          def last(ch):
+              b = [int(k) for k, d in v.items() if d.get('channel') == ch]
+              return max(b) if b else '-'
+          print(f'stable {last(\"stable\")} / beta {last(\"beta\")}')
+          ")
+            msg="📋 steam-monitor daily: ${runs} runs in 24h, latest ${latest}, main $(git log -1 --format='%h %cs')"
+            [ "$SUMMARY" = true ] || msg="🧪 $msg (test)"
           fi
           jq -n --arg c "$msg"$'\n'"$RUN_URL" '{content: $c}' \
             | curl -fsS -o /dev/null -H 'Content-Type: application/json' -d @- "$DISCORD_WEBHOOK_URL"
