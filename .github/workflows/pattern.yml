@@ -234,25 +234,50 @@ jobs:
             echo "DISCORD_WEBHOOK_URL secret not set, skipping"
             exit 0
           fi
-          if [ "$PUBLISHED" = true ]; then
-            msg="✅ steam-monitor published: $(git log -1 --format=%s)"
-          elif [ "$BLOCKED" = true ]; then
-            msg="🚨 steam-monitor pattern resolve blocked, nothing published (issue filed)"
-          elif [ "$FAILED" = true ]; then
-            msg="⚠️ steam-monitor Publish Pattern TOMLs run failed"
-          else
-            since=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
-            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/pattern.yml/runs?created=>=$since&per_page=1" --jq .total_count || echo "?")
-            latest=$(python3 -c "
-          import json
-          v = json.load(open('pattern/versions.json'))
+          since=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          export RUNS=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/pattern.yml/runs?created=>=$since&per_page=1" --jq .total_count || echo "?")
+          # Embed card like the old steam-monitor-bot; the run link sits on
+          # the title so Discord shows no GitHub preview.
+          python3 - <<'PY'
+          import json, os, subprocess, urllib.request
+          from datetime import datetime, timezone
+
+          env = os.environ
+          def git(fmt):
+              return subprocess.check_output(["git", "log", "-1", f"--format={fmt}"], text=True).strip()
+          versions = json.load(open("pattern/versions.json"))
           def last(ch):
-              b = [int(k) for k, d in v.items() if d.get('channel') == ch]
-              return max(b) if b else '-'
-          print(f'stable {last(\"stable\")} / beta {last(\"beta\")}')
-          ")
-            msg="📋 steam-monitor daily: ${runs} runs in 24h, latest ${latest}, main $(git log -1 --format='%h %cs')"
-            [ "$SUMMARY" = true ] || msg="🧪 $msg (test)"
-          fi
-          jq -n --arg c "$msg"$'\n'"$RUN_URL" '{content: $c}' \
-            | curl -fsS -o /dev/null -H 'Content-Type: application/json' -d @- "$DISCORD_WEBHOOK_URL"
+              b = [int(k) for k, d in versions.items() if d.get("channel") == ch]
+              return str(max(b)) if b else "-"
+          head = f"`{git('%h')}` ({git('%cs')})"
+
+          if env["PUBLISHED"] == "true":
+              title, color = "✅ 已发布新 build", 0x2ECC71
+              desc = f"{git('%s')}\nmain {head}"
+          elif env["BLOCKED"] == "true":
+              title, color = "🚨 Pattern 解析被阻塞 — 未发布", 0xE74C3C
+              desc = "已开 issue。人工处理后用 workflow_dispatch 重跑。"
+          elif env["FAILED"] == "true":
+              title, color = "⚠️ 运行失败", 0xF1C40F
+              desc = "点标题查看 Actions 日志。"
+          else:
+              runs = env.get("RUNS") or "?"
+              # The count includes this run; 1 means the */15 schedule did nothing.
+              ok = runs.isdigit() and int(runs) >= 2
+              title = "✅ 每日摘要 — 新链路运行正常" if ok else "⚠️ 每日摘要 — 定时运行偏少"
+              color = 0x2ECC71 if ok else 0xF1C40F
+              desc = (f"近 24 小时运行 {runs} 次 · stable `{last('stable')}` · "
+                      f"beta `{last('beta')}` · main {head}")
+              if env["SUMMARY"] != "true":
+                  title = "🧪 测试 · " + title
+
+          payload = {"embeds": [{
+              "title": title, "url": env["RUN_URL"], "description": desc, "color": color,
+              "footer": {"text": env["GITHUB_REPOSITORY"]},
+              "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+          }]}
+          req = urllib.request.Request(
+              env["DISCORD_WEBHOOK_URL"], data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json", "User-Agent": "steam-monitor-workflow"})
+          urllib.request.urlopen(req, timeout=30).close()
+          PY
