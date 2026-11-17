@@ -2,12 +2,15 @@ name: Publish Pattern TOMLs
 
 on:
   schedule:
+    # Best effort only: GitHub runs this every few hours. The owner's server
+    # cron dispatches every 15 min and sends daily_summary at 09:00 UTC+8.
     - cron: "*/15 * * * *"
-    # Daily Discord summary, 09:07 UTC+8; off the 15-minute grid so it is
-    # a separate run. Keep in sync with SUMMARY in Notify Discord.
-    - cron: "7 1 * * *"
   workflow_dispatch:
     inputs:
+      daily_summary:
+        description: "Send the daily Discord summary (server cron, 09:00)"
+        type: boolean
+        default: false
       discord_test:
         description: "Send the daily Discord summary now, marked as a test"
         type: boolean
@@ -220,14 +223,14 @@ jobs:
         # blocked issue (not every re-run while it stays open), job failure.
         # Plus the daily summary (a missing one means the schedule stopped)
         # and its workflow_dispatch test.
-        if: always() && (steps.publish.outcome == 'success' || steps.blocked.outputs.created == 'true' || job.status == 'failure' || github.event.schedule == '7 1 * * *' || inputs.discord_test)
+        if: always() && (steps.publish.outcome == 'success' || steps.blocked.outputs.created == 'true' || job.status == 'failure' || inputs.daily_summary || inputs.discord_test)
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GH_TOKEN: ${{ github.token }}
           PUBLISHED: ${{ steps.publish.outcome == 'success' }}
           BLOCKED: ${{ steps.blocked.outputs.created == 'true' }}
           FAILED: ${{ job.status == 'failure' }}
-          SUMMARY: ${{ github.event.schedule == '7 1 * * *' }}
+          SUMMARY: ${{ inputs.daily_summary == true }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$DISCORD_WEBHOOK_URL" ]; then
@@ -262,8 +265,9 @@ jobs:
               desc = "点标题查看 Actions 日志。"
           else:
               runs = env.get("RUNS") or "?"
-              # The count includes this run; 1 means the */15 schedule did nothing.
-              ok = runs.isdigit() and int(runs) >= 2
+              # The server dispatches ~96 runs a day; under half means the
+              # 15-minute trigger is failing.
+              ok = runs.isdigit() and int(runs) >= 48
               title = "✅ 每日摘要 — 新链路运行正常" if ok else "⚠️ 每日摘要 — 定时运行偏少"
               color = 0x2ECC71 if ok else 0xF1C40F
               desc = (f"近 24 小时运行 {runs} 次 · stable `{last('stable')}` · "
