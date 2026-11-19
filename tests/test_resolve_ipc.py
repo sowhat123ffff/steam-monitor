@@ -162,7 +162,7 @@ class TestChannelConstants(unittest.TestCase):
         beta = ri.channel_spec(
             "IClientUtils", ri.IPC_IFACES["IClientUtils"], "beta")
         self.assertEqual(stable["methods"][0],
-                         ("GetAppID", 19, "09607EC4", "0AFE7552", 0))
+                         ("GetAppID", 19, "09607EC2", "0AFEF352", 0))
         self.assertEqual(beta["methods"][0],
                          ("GetAppID", 19, "09607EC0", "0AFF7152", 0))
 
