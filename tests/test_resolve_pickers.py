@@ -248,10 +248,14 @@ class TestClientChain(unittest.TestCase):
         self.assertEqual(rp.p2_appid(ctx), (a + 0xA4, None))
 
     def test_pipeclient(self):
-        a, b = 0xA001, 0xA002
-        ctx = mkctx(entries=[a, b], sizes={a: 0x150, b: 0x150},
-                    e8={a + 0xA0: 15, b + 0xA0: 0})
-        self.assertEqual(rp.p2_pipeclient(ctx), (a + 0xA0, None))
+        # Two copies of the GetPipeClient body; only the hot one wins.
+        body = bytes.fromhex("85D27430440FB7CA443B4960")
+        img = Img()
+        img.buf = bytearray(b"\xcc" * 0x10 + body + b"\xcc" * 0x10 + body)
+        img.traw, img.trawsz, img.tva = 0, len(img.buf), 0x1000
+        a, b = 0x1010, 0x1010 + len(body) + 0x10
+        ctx = mkctx(img=img, e8={a: 15, b: 0})
+        self.assertEqual(rp.p2_pipeclient(ctx), (a, None))
 
     def test_getoradd(self):
         ctx = mkctx(callees={0x1: {0xA, 0xB}}, sizes={0xA: 0x8, 0xB: 0x40},

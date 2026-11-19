@@ -164,7 +164,7 @@ class TestChannelConstants(unittest.TestCase):
         self.assertEqual(stable["methods"][0],
                          ("GetAppID", 19, "09607EC4", "0AFE7552", 0))
         self.assertEqual(beta["methods"][0],
-                         ("GetAppID", 19, "09607EC2", "0AFEF352", 0))
+                         ("GetAppID", 19, "09607EC0", "0AFF7152", 0))
 
 
 if __name__ == "__main__":

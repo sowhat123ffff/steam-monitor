@@ -373,11 +373,19 @@ def p2_appid(ctx):
     return _only(hot, "GetAppIDPipe cands")
 
 
+PIPECLIENT_RE = re.compile(rb"\x85\xd2\x74.\x44\x0f\xb7\xca", re.S)
+
+
 def p2_pipeclient(ctx):
-    cands = [t for t in ctx.entries
-             if not ctx.refs_by_func().get(t) and ctx.func_size(t) == 0x150]
-    counts = ctx.e8_count_many({t + 0xA0 for t in cands})
-    hot = [t + 0xA0 for t in cands if counts[t + 0xA0] >= 5]
+    # GetPipeClient is a pdata-less leaf packed after another function, so
+    # its offset into that function moves between builds (beta 1795048523:
+    # 0x150/+0xA0 became 0x160/+0xB0). Its own body does not: test edx,edx;
+    # jz; movzx r9d,dx (the pipe handle -> slot index lookup).
+    img = ctx.img
+    code = bytes(img.buf[img.traw:img.traw + img.trawsz])
+    cands = {img.tva + m.start() for m in PIPECLIENT_RE.finditer(code)}
+    counts = ctx.e8_count_many(cands)
+    hot = [t for t in cands if counts[t] >= 5]
     return _only(hot, "GetPipeClient cands")
 
 
